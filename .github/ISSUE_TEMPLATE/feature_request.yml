@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an improvement within SHIELD's scope
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Note: SHIELD is scoped to exactly two features — the Email Analyzer and the Guardian Scam Scanner.
+        It is not a general-purpose AI chat app and not a resume analyzer. See `CLAUDE.md` for scope. Requests
+        outside this scope will be declined.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
