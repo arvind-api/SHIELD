@@ -1,5 +1,7 @@
 # SHIELD
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Scam & Harmful Intent Email Logic Detector. See `CLAUDE.md` for project scope and conventions.
 
 ## Local development (without Docker)
