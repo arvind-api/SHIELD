@@ -1,5 +1,6 @@
 # SHIELD
 
+[![CI](https://github.com/arvind-api/SHIELD/actions/workflows/ci.yml/badge.svg)](https://github.com/arvind-api/SHIELD/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Scam & Harmful Intent Email Logic Detector. See `CLAUDE.md` for project scope and conventions.
