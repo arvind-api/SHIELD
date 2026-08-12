@@ -1,0 +1,36 @@
+databases:
+  - name: shield-db
+    plan: free
+    databaseName: shield
+    user: shield
+
+services:
+  - name: shield-backend
+    type: web
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shield-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: USE_MOCK_AI
+        value: "false"
+      - key: FRONTEND_ORIGIN
+        value: https://frontend-blush-pi-99.vercel.app
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: PYTHON_VERSION
+        value: 3.12.0

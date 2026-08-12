@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # False for local http dev. Must be True (with HTTPS) in any real deployment —
     # otherwise the browser will silently refuse to set/send the cookie.
     cookie_secure: bool = False
+    # "lax" works for local dev (same-site). Cross-site deployments (frontend and
+    # backend on different domains, e.g. Vercel + Render) need "none", which also
+    # requires cookie_secure=True — browsers reject SameSite=None without Secure.
+    cookie_samesite: str = "lax"
 
 
 settings = Settings()
