@@ -7,6 +7,21 @@ on:
     branches: [master]
 
 jobs:
+  env-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure no real .env file is committed
+        run: |
+          if git ls-files | grep -E '(^|/)\.env(\.local)?$'; then
+            echo "::error::A real .env file is tracked in git. Only .env.example / .env.local.example should be committed."
+            exit 1
+          fi
+      - name: Ensure .env.example files exist
+        run: |
+          test -f .env.example
+          test -f frontend/.env.local.example
+
   backend:
     runs-on: ubuntu-latest
     defaults:
