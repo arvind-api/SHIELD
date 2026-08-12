@@ -1,0 +1,364 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SHIELD design system — "signal in the dark". Forced dark theme: the
+   whole brief is exposing what's hidden in noise, which only reads
+   correctly against near-black. No light-mode branch. */
+:root {
+  --void: #07080a;
+  --void-2: #0b0d10;
+  --foreground: #eef1ee;
+  --surface: rgba(255, 255, 255, 0.04);
+  --surface-strong: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --muted: #8b909a;
+
+  /* Signal green — the "verified / detected" color, a nod to phosphor
+     radar and terminal readouts rather than generic cyan. */
+  --accent: #66ffb2;
+  --accent-foreground: #05130c;
+  --accent-glow: rgba(102, 255, 178, 0.45);
+
+  /* Secondary depth accent, used sparingly in gradients/glows only. */
+  --drift: #8b7cff;
+  --drift-glow: rgba(139, 124, 255, 0.35);
+
+  --risk-low: #66ffb2;
+  --risk-low-bg: rgba(102, 255, 178, 0.1);
+  --risk-low-glow: rgba(102, 255, 178, 0.4);
+
+  --risk-medium: #ffc04d;
+  --risk-medium-bg: rgba(255, 192, 77, 0.1);
+  --risk-medium-glow: rgba(255, 192, 77, 0.4);
+
+  --risk-high: #ff6b6b;
+  --risk-high-bg: rgba(255, 107, 107, 0.1);
+  --risk-high-glow: rgba(255, 107, 107, 0.4);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --background: var(--void);
+}
+
+body {
+  color: var(--foreground);
+  background-color: var(--void);
+  background-image:
+    radial-gradient(ellipse 65% 45% at 12% -8%, rgba(102, 255, 178, 0.1), transparent 60%),
+    radial-gradient(ellipse 55% 40% at 92% 0%, rgba(139, 124, 255, 0.12), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 115%, rgba(102, 255, 178, 0.06), transparent 60%);
+  background-attachment: fixed;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  position: relative;
+}
+
+/* Film-grain overlay — fixed, ultra-low opacity, sits above the ambient
+   glow but below content. Cheap and static (no per-frame cost). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+main {
+  position: relative;
+  z-index: 2;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* --- Type system -----------------------------------------------------
+   Two roles from the fonts already shipped with the project: Geist Sans
+   pushed hard (huge scale, negative tracking, uppercase) carries the
+   kinetic headlines; Geist Mono stays small and wide-tracked for
+   eyebrows, labels, and data — the "readout" voice. */
+@layer components {
+  .eyebrow {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .eyebrow-accent {
+    color: var(--accent);
+  }
+
+  .type-hero {
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 0.94;
+    text-transform: uppercase;
+  }
+
+  .type-display {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .data-figure {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* --- Design system: glass surfaces, buttons, HUD framing ------------------
+   In @layer components so plain Tailwind utilities (e.g. a one-off border
+   color) still win when combined on an element, per Tailwind's intended
+   cascade order. */
+@layer components {
+  .panel {
+    position: relative;
+    background:
+      linear-gradient(var(--surface), var(--surface)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.03)) border-box;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid transparent;
+    border-radius: 0.875rem;
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.45),
+      inset 0 1px 1px rgba(255, 255, 255, 0.08);
+    transition:
+      background-color 300ms ease,
+      box-shadow 300ms ease;
+  }
+
+  .panel:hover {
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.5),
+      inset 0 1px 1px rgba(255, 255, 255, 0.12);
+  }
+
+  .btn-primary {
+    border-radius: 0.5rem;
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+    font-weight: 600;
+    box-shadow: 0 0 24px var(--accent-glow);
+  }
+
+  .btn-primary:disabled {
+    background-color: var(--border-strong);
+    color: var(--muted);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-strong);
+    background-color: var(--surface);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: var(--foreground);
+    font-weight: 600;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--accent);
+    background-color: var(--surface-strong);
+  }
+
+  /* Fixed HUD corner brackets — see layout.tsx. One instance, shared by
+     every page via the root layout. */
+  .hud-corner {
+    position: absolute;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-color: var(--accent);
+    opacity: 0.4;
+    filter: drop-shadow(0 0 4px var(--accent-glow));
+  }
+}
+
+/* --- Scan scene blending ---------------------------------------------
+   Fades the WebGL canvas into the page instead of leaving a hard
+   rectangular edge, and screens its glow into the ambient CSS gradients
+   already painted on <body> so both read as one lit atmosphere. */
+@layer components {
+  .scan-scene {
+    mix-blend-mode: screen;
+    -webkit-mask-image: radial-gradient(ellipse 65% 60% at 50% 40%, #000 45%, transparent 92%);
+    mask-image: radial-gradient(ellipse 65% 60% at 50% 40%, #000 45%, transparent 92%);
+  }
+
+  .scan-scene-side {
+    mix-blend-mode: screen;
+    -webkit-mask-image: radial-gradient(ellipse 85% 75% at 50% 50%, #000 40%, transparent 95%);
+    mask-image: radial-gradient(ellipse 85% 75% at 50% 50%, #000 40%, transparent 95%);
+  }
+}
+
+/* --- Tilt cards --------------------------------------------------------
+   Pairs with TiltCard.tsx: a perspective transform driven by --tilt-x/
+   --tilt-y custom properties set from pointer position, plus a radial
+   highlight that follows the cursor across the surface. */
+@layer components {
+  .tilt-card {
+    --tilt-x: 0deg;
+    --tilt-y: 0deg;
+    --glow-x: 50%;
+    --glow-y: 50%;
+    transform: perspective(800px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+    transition: transform 400ms var(--ease-out);
+    will-change: transform;
+  }
+
+  .tilt-card:hover {
+    transition: transform 60ms linear;
+  }
+
+  .tilt-card-surface {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .tilt-card-surface::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 200ms ease;
+    background: radial-gradient(
+      280px circle at var(--glow-x) var(--glow-y),
+      var(--accent-glow),
+      transparent 70%
+    );
+  }
+
+  .tilt-card:hover .tilt-card-surface::before {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tilt-card {
+      transform: none !important;
+      transition: none;
+    }
+  }
+}
+
+/* --- Marquee ticker -----------------------------------------------------
+   Structural, not decorative: it lists the threat vectors SHIELD
+   actually screens for. Duplicated content track scrolls seamlessly. */
+@layer components {
+  .marquee {
+    position: relative;
+    display: flex;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  }
+
+  .marquee-track {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 2.5rem;
+    animation: marquee-scroll 32s linear infinite;
+    padding-right: 2.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .marquee-track {
+      animation: none;
+    }
+  }
+}
+
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* --- Radar sweep ----------------------------------------------------------
+   Signature motif: a rotating conic gradient standing in for an active
+   scan. Used behind the 3D scan orb and as the "analyzing" state. */
+@layer components {
+  .radar-sweep {
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      var(--accent-glow) 8deg,
+      transparent 60deg
+    );
+    animation: radar-spin 3.2s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .radar-sweep {
+      animation: none;
+    }
+  }
+}
+
+@keyframes radar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Shared entrance animations — see .result-panel-enter / .error-message-enter
+   usage in EmailAnalyzerForm, GuardianScannerForm, and the auth pages.
+   Reduced-motion neutralizes the transform via the custom properties below
+   rather than removing the transition, so opacity still fades (gentler,
+   not zero). */
+.result-panel-enter {
+  --enter-scale: 0.97;
+  transition:
+    transform 250ms var(--ease-out),
+    opacity 250ms var(--ease-out);
+
+  @starting-style {
+    opacity: 0;
+    transform: scale(var(--enter-scale));
+  }
+}
+
+.error-message-enter {
+  --enter-y: -4px;
+  transition:
+    transform 200ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(var(--enter-y));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-panel-enter {
+    --enter-scale: 1;
+  }
+
+  .error-message-enter {
+    --enter-y: 0px;
+  }
+}
