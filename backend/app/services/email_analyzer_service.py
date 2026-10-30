@@ -42,6 +42,8 @@ URGENCY_PATTERNS = [
     r"\bexpires? (today|soon|in \d+ hours?)\b",
     r"\blegal action\b",
     r"\bfailure to (respond|comply)\b",
+    r"\b(by|before) (the )?end of (the )?(day|business)\b",
+    r"\botherwise\b[^.]{0,80}\bwill be (delayed|withheld|suspended|locked|closed|cancell?ed|frozen)\b",
 ]
 
 CREDENTIAL_PAYMENT_PATTERNS = [
@@ -58,10 +60,16 @@ CREDENTIAL_PAYMENT_PATTERNS = [
     r"\bverify your (account|identity|payment)\b",
     r"\bupdate your (payment|billing) information\b",
     r"\bconfirm your (password|pin|account number)\b",
+    r"\b(login|log-in|sign[- ]in|account) (credentials|details)\b",
+    r"\baccount number\b",
 ]
 
+# Phishing that asks the victim to send sensitive info back by email, with no
+# link at all — the link-based combo bonus below never fires for these.
+REPLY_WITH_INFO_RE = re.compile(r"\breply(ing)? (to this email|with)\b", re.IGNORECASE)
+
 GENERIC_GREETING_RE = re.compile(
-    r"dear (customer|user|sir|madam|sir/madam|valued customer|account holder|member)\b",
+    r"dear (customer|user|sir|madam|sir/madam|valued customer|account holder|member|employee|staff|client)\b",
     re.IGNORECASE,
 )
 
@@ -127,6 +135,19 @@ def _score_and_flag(text: str) -> tuple[int, list[str], int]:
         signals.append(
             "combines a request for credentials/payment with a suspicious link — a classic phishing signature"
         )
+
+    # Link-free credential phishing (e.g. fake HR/payroll "reply with your bank
+    # details by end of day") was landing at low risk: the request plus a
+    # deadline/threat is itself the signature, even without a bad link.
+    if cred_hits and urgency_hits:
+        score += 20
+        signals.append("pairs a request for sensitive info with a deadline or threat")
+
+        # Only under pressure — a plain "questions? reply to this email" in a
+        # welcome email that mentions account details shouldn't count.
+        if REPLY_WITH_INFO_RE.search(text):
+            score += 15
+            signals.append("asks you to send sensitive info by replying to the email")
 
     sender_signals = _find_sender_mismatch(text)
     if sender_signals:
