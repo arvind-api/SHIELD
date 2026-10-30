@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.evidence import AnalysisMode, Evidence
+
 
 class ScanRequest(BaseModel):
     # Same bound as EmailAnalyzeRequest — comfortably covers any real
@@ -18,7 +20,9 @@ class ScamScanResult(BaseModel):
     category: str
     red_flags: list[str] = []
     reasoning: str
+    evidence: list[Evidence] = []
 
 
 class ScanResponse(ScamScanResult):
     id: int
+    analysis_mode: AnalysisMode

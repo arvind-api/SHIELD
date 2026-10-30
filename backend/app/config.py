@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # to rule-based mock mode automatically.
     anthropic_api_key: str | None = None
     use_mock_ai: bool = False
+    anthropic_model: str = "claude-opus-5-5"
+    # Thinking depth for analysis calls: low | medium | high | xhigh | max.
+    anthropic_effort: str = "medium"
 
     # CORS
     frontend_origin: str = "http://localhost:3000"

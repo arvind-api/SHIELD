@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.evidence import AnalysisMode, Evidence
+
 
 class EmailAnalyzeRequest(BaseModel):
     # 20,000 chars comfortably covers a real email (headers + body) while
@@ -19,7 +21,9 @@ class EmailAnalysisResult(BaseModel):
     risk_score: int = Field(ge=0, le=100)
     risk_level: Literal["low", "medium", "high"]
     suggested_reply: str
+    evidence: list[Evidence] = []
 
 
 class EmailAnalyzeResponse(EmailAnalysisResult):
     id: int
+    analysis_mode: AnalysisMode

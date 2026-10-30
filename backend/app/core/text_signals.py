@@ -6,6 +6,10 @@ the two engines don't duplicate the same regex/domain logic.
 
 import re
 
+from app.schemas.evidence import Evidence
+
+MAX_EVIDENCE = 10
+
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 IP_URL_RE = re.compile(r"^https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
 SHORTENER_DOMAINS = {
@@ -74,21 +78,57 @@ def domain_impersonates_brand(domain: str) -> str | None:
     return None
 
 
-def find_suspicious_links(text: str) -> list[str]:
-    signals = []
+def scan_links(text: str) -> list[tuple[str, str]]:
+    """(url, signal) for every red flag on every link in `text`."""
+    hits = []
     for url in URL_RE.findall(text):
         domain = extract_domain(url)
         if IP_URL_RE.match(url):
-            signals.append(f"link uses a raw IP address instead of a domain ({url})")
+            hits.append((url, f"link uses a raw IP address instead of a domain ({url})"))
         if domain in SHORTENER_DOMAINS:
-            signals.append(f"link uses a URL shortener ({domain}) that hides the real destination")
+            hits.append((url, f"link uses a URL shortener ({domain}) that hides the real destination"))
         tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
         if tld in SUSPICIOUS_TLDS:
-            signals.append(f"link uses an uncommon/high-risk top-level domain (.{tld})")
+            hits.append((url, f"link uses an uncommon/high-risk top-level domain (.{tld})"))
         brand_hit = domain_impersonates_brand(domain)
         if brand_hit:
-            signals.append(f"link domain '{domain}' looks like it's impersonating {brand_hit}")
-    return signals
+            hits.append((url, f"link domain '{domain}' looks like it's impersonating {brand_hit}"))
+    return hits
+
+
+def find_suspicious_links(text: str) -> list[str]:
+    return [signal for _, signal in scan_links(text)]
+
+
+def matched_phrases(text: str, patterns: list[str]) -> list[str]:
+    """The exact text matched by each pattern that hits (first match each),
+    in pattern order — len() equals the number of patterns that matched."""
+    phrases = []
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            phrases.append(match.group(0))
+    return phrases
+
+
+def build_evidence(text: str, candidates: list[tuple[str, str]]) -> list[Evidence]:
+    """Turn (quote, reason) pairs into Evidence, keeping only quotes that
+    really occur in `text` (case-insensitive) — an AI quote that was
+    paraphrased can't be highlighted, so it's dropped rather than shown
+    as if it were in the message. Deduped by quote, capped."""
+    lower = text.lower()
+    seen: set[str] = set()
+    evidence = []
+    for quote, reason in candidates:
+        quote = quote.strip()
+        key = quote.lower()
+        if not quote or key in seen or key not in lower:
+            continue
+        seen.add(key)
+        evidence.append(Evidence(quote=quote, reason=reason))
+        if len(evidence) >= MAX_EVIDENCE:
+            break
+    return evidence
 
 
 def find_grammar_anomalies(text: str) -> list[str]:

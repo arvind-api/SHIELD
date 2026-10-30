@@ -113,6 +113,16 @@ Hi there,
 Thanks for signing up! You can change your account details anytime from the Settings page.
 
 Questions? Just reply to this email and we'll help out.""",
+    # Mentions a password and an expiry time — but no threat. Guards the
+    # credential + deadline bonus against firing on ordinary resets.
+    "B6_real_password_reset": """From: "GitHub" <noreply@github.com>
+Subject: Your password reset request
+
+We received a request to reset the password for your GitHub account. This link expires in 1 hour.
+
+Reset your password: https://github.com/password_reset/confirm?token=abc123xyz
+
+If you didn't request a password reset, you can safely ignore this email.""",
 }
 
 # Legitimate samples must stay strictly below the "medium" threshold used by
@@ -140,3 +150,12 @@ def test_legitimate_samples_score_low(text: str) -> None:
         f"risk_score {result.risk_score} crept toward the medium threshold "
         f"(ceiling={LEGITIMATE_RISK_SCORE_CEILING}, signals={result.phishing_signals})"
     )
+
+
+@pytest.mark.parametrize("text", PHISHING_SAMPLES.values(), ids=PHISHING_SAMPLES.keys())
+def test_phishing_evidence_quotes_are_verbatim(text: str) -> None:
+    # The UI highlights each quote in place, so it must occur in the input.
+    result = _analyze_email_mock(text)
+    assert result.evidence, "high-risk result should point at the text that triggered it"
+    for item in result.evidence:
+        assert item.quote.lower() in text.lower()
