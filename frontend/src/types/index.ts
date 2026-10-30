@@ -17,6 +17,16 @@ export interface LoginRequest {
   password: string;
 }
 
+// --- Shared analysis types --------------------------------------------------
+// Mirrors backend/app/schemas/evidence.py 1:1.
+
+export interface Evidence {
+  quote: string;
+  reason: string;
+}
+
+export type AnalysisMode = "ai" | "rules" | "rules_fallback";
+
 // --- Email Analyzer -------------------------------------------------------
 // Mirrors backend/app/schemas/email_analyzer.py 1:1.
 
@@ -31,10 +41,12 @@ export interface EmailAnalysisResult {
   risk_score: number;
   risk_level: "low" | "medium" | "high";
   suggested_reply: string;
+  evidence: Evidence[];
 }
 
 export interface EmailAnalyzeResponse extends EmailAnalysisResult {
   id: number;
+  analysis_mode: AnalysisMode;
 }
 
 // --- Guardian Scam Scanner -------------------------------------------------
@@ -50,8 +62,10 @@ export interface ScamScanResult {
   category: string;
   red_flags: string[];
   reasoning: string;
+  evidence: Evidence[];
 }
 
 export interface ScanResponse extends ScamScanResult {
   id: number;
+  analysis_mode: AnalysisMode;
 }
