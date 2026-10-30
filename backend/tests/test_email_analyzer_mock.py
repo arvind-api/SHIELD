@@ -57,6 +57,17 @@ Verify your account now: http://amaz0n-account.com/billing
 
 Thank you,
 Amazon Account Services""",
+    # No link at all — credentials are requested by reply under a deadline.
+    # Previously scored 10/100 (low).
+    "A5_fake_payroll_reply": """From: hr-team@company-payroll-update.com
+Subject: Action required: confirm your salary details
+
+Dear Employee,
+
+We are updating our payroll system. Please confirm your bank account number and login credentials by replying to this email before end of day today, otherwise your salary for this month will be delayed.
+
+Thanks,
+HR Department""",
 }
 
 LEGITIMATE_SAMPLES = {
@@ -93,6 +104,15 @@ Subject: Reminder: Dentist appointment tomorrow at 10am
 This is a reminder that you have an appointment tomorrow at 10:00 AM with Dr. Patel.
 
 Reply to this email if you need to reschedule.""",
+    # Mentions account details and replying, but makes no demand under pressure.
+    "B5_real_account_settings": """From: "Support" <help@notes-app-example.com>
+Subject: Welcome to Notes
+
+Hi there,
+
+Thanks for signing up! You can change your account details anytime from the Settings page.
+
+Questions? Just reply to this email and we'll help out.""",
 }
 
 # Legitimate samples must stay strictly below the "medium" threshold used by
