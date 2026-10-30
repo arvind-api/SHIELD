@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject, type Ref } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, MeshTransmissionMaterial } from "@react-three/drei";
-import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
-import { BlendFunction } from "postprocessing";
+import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
+import { BlendFunction, type BloomEffect, type ChromaticAberrationEffect } from "postprocessing";
 import * as THREE from "three";
+
+import { scanSignal, type Risk } from "@/lib/scanSignal";
 
 // The site's signature motif: a glass shield core you can actually pick
 // up and spin — drag it and it coasts on inertia like a real object, a
@@ -14,10 +16,23 @@ import * as THREE from "three";
 // nudges its rotation, and clicking fires a bright scan pulse. Fog +
 // bloom + a drifting particle field keep it reading as one lit
 // atmosphere rather than an object pasted on top of the page.
+//
+// The scene is also the analyzers' live readout (see lib/scanSignal.ts):
+// keystrokes charge the core, a scan spins it up, sweeps a beam through
+// it and pulls the particle field inward, and the verdict lands as a
+// shockwave that re-tints the whole scene in the risk color — with a
+// camera jolt and chromatic split on high risk.
 
 const VOID = "#07080a";
+const WHITE = new THREE.Color("#ffffff");
+const IDLE_TINT = new THREE.Color("#66ffb2");
+const RISK_TINT: Record<Risk, THREE.Color> = {
+  low: new THREE.Color("#66ffb2"),
+  medium: new THREE.Color("#ffc04d"),
+  high: new THREE.Color("#ff6b6b"),
+};
 
-type Pulse = { id: number; born: number };
+type Pulse = { id: number; born: number; color: THREE.Color; delay: number };
 
 type DragState = {
   dragging: boolean;
@@ -29,28 +44,108 @@ type DragState = {
   rotX: number;
 };
 
+// Per-frame scene state derived from scanSignal, shared by every layer.
+type Live = {
+  tint: THREE.Color; // current accent color, eased toward the risk color
+  scan: number; // 0..1, eased scanning intensity
+  flash: number; // 0..1, verdict flash, decays
+  shake: number; // 0..1, high-risk jolt, decays
+  energy: number; // 0..1, typing charge, decays
+};
+
+function ease(current: number, target: number, delta: number, rate: number) {
+  return current + (target - current) * Math.min(delta * rate, 1);
+}
+
+// Reads scanSignal once per frame and turns phase changes into eased
+// scene values and one-shot events (the verdict shockwave).
+function SignalDriver({
+  live,
+  onVerdict,
+}: {
+  live: MutableRefObject<Live>;
+  onVerdict: (color: THREE.Color, risk: Risk) => void;
+}) {
+  const seenVersion = useRef(scanSignal.version);
+
+  useFrame((_, delta) => {
+    const l = live.current;
+    if (scanSignal.version !== seenVersion.current) {
+      seenVersion.current = scanSignal.version;
+      if (scanSignal.phase === "result" && scanSignal.risk) {
+        l.flash = 1;
+        l.shake = scanSignal.risk === "high" ? 1 : scanSignal.risk === "medium" ? 0.35 : 0;
+        onVerdict(RISK_TINT[scanSignal.risk], scanSignal.risk);
+      }
+    }
+
+    const targetTint = scanSignal.risk ? RISK_TINT[scanSignal.risk] : IDLE_TINT;
+    l.tint.lerp(targetTint, Math.min(delta * 2.2, 1));
+    l.scan = ease(l.scan, scanSignal.phase === "scanning" ? 1 : 0, delta, scanSignal.phase === "scanning" ? 3 : 1.6);
+    l.flash = Math.max(0, l.flash - delta * 1.1);
+    l.shake = Math.max(0, l.shake - delta * 1.6);
+    scanSignal.energy = Math.max(0, scanSignal.energy - delta * 0.9);
+    l.energy = scanSignal.energy;
+  });
+
+  return null;
+}
+
+// Eases the camera toward the pointer for real depth parallax (the far
+// star layer and near shards move at different rates), dollies in while
+// scanning, and jolts on a high-risk verdict.
+function CameraRig({ live, calm }: { live: MutableRefObject<Live>; calm: boolean }) {
+  useFrame((state, delta) => {
+    const l = live.current;
+    const cam = state.camera;
+    const tx = calm ? 0 : state.pointer.x * 0.55;
+    const ty = calm ? 0 : state.pointer.y * 0.35;
+    const tz = 5 - l.scan * 0.7 + l.flash * 0.25;
+    cam.position.x = ease(cam.position.x, tx, delta, 2.5);
+    cam.position.y = ease(cam.position.y, ty, delta, 2.5);
+    cam.position.z = ease(cam.position.z, tz, delta, 2.5);
+    if (!calm && l.shake > 0) {
+      cam.position.x += (Math.random() - 0.5) * 0.09 * l.shake;
+      cam.position.y += (Math.random() - 0.5) * 0.09 * l.shake;
+    }
+    cam.lookAt(0, 0, 0);
+  });
+  return null;
+}
+
 function GlassCore({
   onPulse,
   drag,
   hovered,
   setHovered,
+  live,
+  calm,
 }: {
-  onPulse: (pulse: Pulse) => void;
+  onPulse: () => void;
   drag: MutableRefObject<DragState>;
   hovered: boolean;
   setHovered: (v: boolean) => void;
+  live: MutableRefObject<Live>;
+  calm: boolean;
 }) {
   const group = useRef<THREE.Group>(null);
+  const glass = useRef<THREE.MeshPhysicalMaterial>(null);
   const wire = useRef<THREE.Mesh>(null);
   const ring = useRef<THREE.Mesh>(null);
+  const outerRing = useRef<THREE.Mesh>(null);
   const light = useRef<THREE.PointLight>(null);
   const pointerTarget = useRef({ x: 0, y: 0 });
   const scrollOffset = useRef(0);
   const { viewport } = useThree();
 
   const geometry = useMemo(() => new THREE.IcosahedronGeometry(1.35, 2), []);
+  const scaleTarget = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((state, delta) => {
+    const l = live.current;
+    const t = state.clock.elapsedTime;
+    const motion = calm ? 0.25 : 1;
+
     if (typeof window !== "undefined") {
       const max = document.body.scrollHeight - window.innerHeight;
       scrollOffset.current = max > 0 ? window.scrollY / max : 0;
@@ -74,7 +169,8 @@ function GlassCore({
 
     if (group.current) {
       group.current.rotation.x = pointerTarget.current.x * 0.5 + scrollOffset.current * 0.6 + d.rotX;
-      group.current.rotation.y += delta * (hovered ? 0.32 : 0.14) + pointerTarget.current.y * delta;
+      const spin = (hovered ? 0.32 : 0.14) + (l.scan * 1.8 + l.energy * 0.9) * motion;
+      group.current.rotation.y += delta * spin + pointerTarget.current.y * delta;
 
       // d.rotY is an absolute accumulated drag value, not a per-frame
       // delta — apply only the change since last frame on top of the
@@ -83,33 +179,49 @@ function GlassCore({
       group.current.rotation.y += d.rotY - lastDragY;
       group.current.userData.lastDragY = d.rotY;
 
-      const s = (hovered ? 1.15 : d.dragging ? 1.1 : 1) * Math.min(viewport.width / 6, 1.05);
-      group.current.scale.lerp(new THREE.Vector3(s, s, s), Math.min(delta * 5, 1));
+      const breathe = 1 + Math.sin(t * 7) * 0.025 * l.scan * motion + l.flash * 0.1 * motion;
+      const s = (hovered ? 1.15 : d.dragging ? 1.1 : 1) * Math.min(viewport.width / 6, 1.05) * breathe;
+      group.current.scale.lerp(scaleTarget.set(s, s, s), Math.min(delta * 5, 1));
     }
-    if (wire.current) wire.current.rotation.y -= delta * 0.05;
-    if (ring.current) ring.current.rotation.z -= delta * 0.6;
+
+    if (glass.current) glass.current.color.copy(l.tint).lerp(WHITE, 0.6);
+    if (wire.current) {
+      wire.current.rotation.y -= delta * (0.05 + l.scan * 0.6 * motion);
+      const material = wire.current.material as THREE.MeshBasicMaterial;
+      material.color.copy(l.tint).lerp(WHITE, hovered ? 0.5 : 0);
+      const flicker = 0.5 + 0.5 * Math.sin(t * 14);
+      material.opacity = (hovered ? 0.4 : 0.22) + l.scan * 0.3 * flicker + l.flash * 0.35 + l.energy * 0.15;
+    }
+    if (ring.current) {
+      ring.current.rotation.z -= delta * (0.6 + l.scan * 3 * motion);
+      const material = ring.current.material as THREE.MeshBasicMaterial;
+      material.color.copy(l.tint);
+      material.opacity = (hovered ? 0.55 : 0.32) + l.scan * 0.3 + l.flash * 0.4;
+    }
+    if (outerRing.current) {
+      outerRing.current.rotation.z += delta * (0.15 + l.scan * 1.4 * motion);
+      (outerRing.current.material as THREE.MeshBasicMaterial).color.copy(l.tint);
+    }
 
     // Point light tracks the pointer in world space just in front of the
     // core, so facets light up as the cursor sweeps across them.
     if (light.current) {
       light.current.position.set(state.pointer.x * 2.2, state.pointer.y * 2.2, 1.8);
+      light.current.color.copy(l.tint).lerp(WHITE, 0.3);
+      const base = hovered || d.dragging ? 14 : 4.5;
       light.current.intensity = THREE.MathUtils.lerp(
         light.current.intensity,
-        hovered || d.dragging ? 14 : 4.5,
+        base + l.scan * 10 + l.flash * 24 + l.energy * 7,
         Math.min(delta * 6, 1)
       );
     }
   });
 
   return (
-    <group
-      ref={group}
-      onPointerOver={() => setHovered(true)}
-      onPointerOut={() => setHovered(false)}
-      onClick={() => onPulse({ id: Math.random(), born: performance.now() })}
-    >
+    <group ref={group} onPointerOver={() => setHovered(true)} onPointerOut={() => setHovered(false)} onClick={onPulse}>
       <mesh geometry={geometry}>
         <MeshTransmissionMaterial
+          ref={glass}
           color="#bfffdc"
           thickness={1.1}
           roughness={0.08}
@@ -124,18 +236,13 @@ function GlassCore({
         />
       </mesh>
       <mesh ref={wire} geometry={geometry} scale={1.008}>
-        <meshBasicMaterial
-          color={hovered ? "#c8ffe4" : "#66ffb2"}
-          wireframe
-          transparent
-          opacity={hovered ? 0.4 : 0.22}
-        />
+        <meshBasicMaterial color="#66ffb2" wireframe transparent opacity={0.22} />
       </mesh>
       <mesh ref={ring} rotation={[Math.PI / 2.4, 0, 0]}>
         <torusGeometry args={[1.85, 0.006, 8, 96]} />
-        <meshBasicMaterial color="#66ffb2" transparent opacity={hovered ? 0.55 : 0.32} />
+        <meshBasicMaterial color="#66ffb2" transparent opacity={0.32} />
       </mesh>
-      <mesh rotation={[Math.PI / 2.4, 0, 0]}>
+      <mesh ref={outerRing} rotation={[Math.PI / 2.4, 0, 0]}>
         <torusGeometry args={[2.05, 0.003, 8, 96]} />
         <meshBasicMaterial color="#66ffb2" transparent opacity={0.13} />
       </mesh>
@@ -144,33 +251,73 @@ function GlassCore({
   );
 }
 
-// Expanding rings spawned on click — a visible "scan pulse" so the core
-// reads as something you press, not just something you watch.
-function ScanPulses({ pulses }: { pulses: Pulse[] }) {
+// Two horizontal rings that sweep up and down through the core while a
+// scan runs, sized to the sphere's cross-section at their height so they
+// read as a beam passing through it. World-aligned (not inside the core's
+// rotating group) so the sweep stays level however the core is spun.
+function ScanBeams({ live, calm }: { live: MutableRefObject<Live>; calm: boolean }) {
+  const beams = [useRef<THREE.Mesh>(null), useRef<THREE.Mesh>(null)];
+  const { viewport } = useThree();
+
+  useFrame((state) => {
+    const l = live.current;
+    const fit = Math.min(viewport.width / 6, 1.05);
+    beams.forEach((beam, i) => {
+      if (!beam.current) return;
+      const phase = state.clock.elapsedTime * (calm ? 0.8 : 2.2) + i * Math.PI;
+      const y = Math.sin(phase) * 1.25;
+      const radius = Math.sqrt(Math.max(1.42 * 1.42 - y * y, 0.05));
+      beam.current.position.y = y * fit;
+      beam.current.scale.setScalar(radius * fit);
+      const material = beam.current.material as THREE.MeshBasicMaterial;
+      material.color.copy(l.tint).lerp(WHITE, 0.35);
+      material.opacity = l.scan * (i === 0 ? 0.9 : 0.45);
+      beam.current.visible = material.opacity > 0.01;
+    });
+  });
+
   return (
     <>
-      {pulses.map((pulse) => (
-        <PulseRing key={pulse.id} born={pulse.born} />
+      {beams.map((beam, i) => (
+        <mesh key={i} ref={beam} rotation={[Math.PI / 2, 0, 0]} visible={false}>
+          <torusGeometry args={[1, 0.012, 8, 128]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
       ))}
     </>
   );
 }
 
-function PulseRing({ born }: { born: number }) {
+// Expanding rings — a click on the core fires one, a verdict fires a
+// staggered burst in the risk color.
+function ScanPulses({ pulses }: { pulses: Pulse[] }) {
+  return (
+    <>
+      {pulses.map((pulse) => (
+        <PulseRing key={pulse.id} pulse={pulse} />
+      ))}
+    </>
+  );
+}
+
+function PulseRing({ pulse }: { pulse: Pulse }) {
   const mesh = useRef<THREE.Mesh>(null);
   useFrame(() => {
     if (!mesh.current) return;
-    const age = (performance.now() - born) / 1000;
-    const t = Math.min(age / 1.1, 1);
-    const scale = 1.3 + t * 3.8;
-    mesh.current.scale.setScalar(scale);
+    const age = (performance.now() - pulse.born) / 1000 - pulse.delay;
     const material = mesh.current.material as THREE.MeshBasicMaterial;
-    material.opacity = 0.75 * (1 - t);
+    if (age < 0) {
+      material.opacity = 0;
+      return;
+    }
+    const t = Math.min(age / 1.2, 1);
+    mesh.current.scale.setScalar(1.3 + (1 - (1 - t) ** 3) * 4.2);
+    material.opacity = 0.8 * (1 - t);
   });
   return (
     <mesh ref={mesh} rotation={[Math.PI / 2.4, 0, 0]}>
-      <torusGeometry args={[1, 0.01, 8, 96]} />
-      <meshBasicMaterial color="#9dffce" transparent opacity={0.75} />
+      <torusGeometry args={[1, 0.012, 8, 96]} />
+      <meshBasicMaterial color={pulse.color} transparent opacity={0} depthWrite={false} />
     </mesh>
   );
 }
@@ -178,8 +325,8 @@ function PulseRing({ born }: { born: number }) {
 // Small wireframe fragments scattered through the whole scene, each
 // drifting and tumbling on its own independent axis — fills the frame
 // with actual geometry so the space around the core doesn't read as
-// empty black.
-function FloatingShards({ count = 10 }: { count?: number }) {
+// empty black. A verdict blows them outward for a moment.
+function FloatingShards({ count = 10, live }: { count?: number; live: MutableRefObject<Live> }) {
   const group = useRef<THREE.Group>(null);
 
   const shards = useMemo(() => {
@@ -187,15 +334,15 @@ function FloatingShards({ count = 10 }: { count?: number }) {
       const angle = (i / count) * Math.PI * 2 + Math.random() * 0.6;
       const radius = 3.2 + Math.random() * 4.5;
       return {
-        position: [
-          Math.cos(angle) * radius,
-          (Math.random() - 0.5) * 4.5,
-          Math.sin(angle) * radius - 1,
-        ] as [number, number, number],
+        position: [Math.cos(angle) * radius, (Math.random() - 0.5) * 4.5, Math.sin(angle) * radius - 1] as [
+          number,
+          number,
+          number,
+        ],
         scale: 0.14 + Math.random() * 0.24,
         speed: 0.08 + Math.random() * 0.18,
         axis: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(),
-        color: i % 3 === 0 ? "#8b7cff" : "#66ffb2",
+        accent: i % 3 !== 0,
         bobOffset: Math.random() * Math.PI * 2,
       };
     });
@@ -203,10 +350,15 @@ function FloatingShards({ count = 10 }: { count?: number }) {
 
   useFrame((state, delta) => {
     if (!group.current) return;
+    const l = live.current;
+    const push = 1 + l.flash * 0.18 - l.scan * 0.12;
     group.current.children.forEach((child, i) => {
       const s = shards[i];
-      child.rotateOnAxis(s.axis, delta * s.speed);
+      child.rotateOnAxis(s.axis, delta * s.speed * (1 + l.scan * 4));
+      child.position.x = s.position[0] * push;
+      child.position.z = s.position[2] * push;
       child.position.y = s.position[1] + Math.sin(state.clock.elapsedTime * 0.4 + s.bobOffset) * 0.35;
+      if (s.accent) ((child as THREE.Mesh).material as THREE.MeshBasicMaterial).color.copy(l.tint);
     });
   });
 
@@ -215,7 +367,7 @@ function FloatingShards({ count = 10 }: { count?: number }) {
       {shards.map((s, i) => (
         <mesh key={i} position={s.position} scale={s.scale}>
           <icosahedronGeometry args={[1, 0]} />
-          <meshBasicMaterial color={s.color} wireframe transparent opacity={0.4} />
+          <meshBasicMaterial color={s.accent ? "#66ffb2" : "#8b7cff"} wireframe transparent opacity={0.4} />
         </mesh>
       ))}
     </group>
@@ -225,8 +377,10 @@ function FloatingShards({ count = 10 }: { count?: number }) {
 // A thin drifting particle field that extends well past the core
 // itself, so the "3D layer" fills the whole frame instead of sitting
 // as an island in the middle of it — reads as atmosphere, not a prop.
-function DriftField({ density = 260 }: { density?: number }) {
+// While scanning it swirls faster and contracts toward the core.
+function DriftField({ density = 260, live }: { density?: number; live: MutableRefObject<Live> }) {
   const points = useRef<THREE.Points>(null);
+  const material = useRef<THREE.PointsMaterial>(null);
 
   const positions = useMemo(() => {
     const arr = new Float32Array(density * 3);
@@ -242,9 +396,16 @@ function DriftField({ density = 260 }: { density?: number }) {
   }, [density]);
 
   useFrame((state, delta) => {
+    const l = live.current;
     if (points.current) {
-      points.current.rotation.y += delta * 0.015;
+      points.current.rotation.y += delta * (0.015 + l.scan * 0.35);
       points.current.rotation.x = state.pointer.y * 0.03;
+      points.current.scale.setScalar(1 - l.scan * 0.38 + l.flash * 0.12);
+    }
+    if (material.current) {
+      material.current.color.copy(l.tint).lerp(WHITE, 0.25);
+      material.current.opacity = 0.35 + l.scan * 0.35 + l.flash * 0.4;
+      material.current.size = 0.028 + l.scan * 0.012;
     }
   });
 
@@ -253,8 +414,77 @@ function DriftField({ density = 260 }: { density?: number }) {
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#8fffca" size={0.028} transparent opacity={0.35} sizeAttenuation />
+      <pointsMaterial ref={material} color="#8fffca" size={0.028} transparent opacity={0.35} sizeAttenuation />
     </points>
+  );
+}
+
+// A sparse, far-away star shell behind the fog line. It barely moves on
+// its own; the camera rig's parallax is what makes it read as depth.
+function DepthStars({ count = 500 }: { count?: number }) {
+  const points = useRef<THREE.Points>(null);
+  const positions = useMemo(() => {
+    const arr = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const radius = 13 + Math.random() * 10;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(Math.random() * 2 - 1);
+      arr[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+      arr[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+      arr[i * 3 + 2] = -Math.abs(radius * Math.cos(phi)) - 4;
+    }
+    return arr;
+  }, [count]);
+
+  useFrame((_, delta) => {
+    if (points.current) points.current.rotation.z += delta * 0.004;
+  });
+
+  return (
+    <points ref={points}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial color="#cfd6ff" size={0.06} transparent opacity={0.5} sizeAttenuation fog={false} />
+    </points>
+  );
+}
+
+function ReactiveEffects({ live, calm }: { live: MutableRefObject<Live>; calm: boolean }) {
+  const bloom = useRef<BloomEffect>(null);
+  const aberration = useRef<ChromaticAberrationEffect>(null);
+  const aberrationOffset = useMemo(() => new THREE.Vector2(0, 0), []);
+
+  useFrame(() => {
+    const l = live.current;
+    if (bloom.current) bloom.current.intensity = 0.65 + l.scan * 0.5 + l.flash * 1.1;
+    if (aberration.current) {
+      const amount = calm ? 0 : l.scan * 0.0012 + l.shake * 0.007;
+      aberration.current.offset.set(amount, amount * 0.6);
+    }
+  });
+
+  // @react-three/postprocessing types effect refs as the effect *class*,
+  // but the ref receives the instance at runtime — cast to bridge the two.
+  return (
+    <EffectComposer multisampling={0}>
+      <Bloom
+        ref={bloom as unknown as Ref<typeof BloomEffect>}
+        intensity={0.65}
+        luminanceThreshold={0.05}
+        luminanceSmoothing={0.4}
+        mipmapBlur
+        blendFunction={BlendFunction.SCREEN}
+      />
+      <ChromaticAberration
+        ref={aberration as unknown as Ref<typeof ChromaticAberrationEffect>}
+        offset={aberrationOffset}
+        radialModulation={false}
+        modulationOffset={0}
+        blendFunction={BlendFunction.NORMAL}
+      />
+      <Vignette eskil={false} offset={0.15} darkness={0.9} blendFunction={BlendFunction.NORMAL} />
+    </EffectComposer>
   );
 }
 
@@ -263,22 +493,32 @@ function Scene({
   particles,
   shardCount,
   bloom,
+  calm,
 }: {
   drag: MutableRefObject<DragState>;
   particles: number;
   shardCount: number;
   bloom: boolean;
+  calm: boolean;
 }) {
   const { scene } = useThree();
   const [pulses, setPulses] = useState<Pulse[]>([]);
   const [hovered, setHovered] = useState(false);
+  const live = useRef<Live>({ tint: IDLE_TINT.clone(), scan: 0, flash: 0, shake: 0, energy: 0 });
 
   useMemo(() => {
     scene.fog = new THREE.Fog(VOID, 4.5, 12);
   }, [scene]);
 
-  function addPulse(pulse: Pulse) {
-    setPulses((prev) => [...prev.filter((p) => performance.now() - p.born < 1200), pulse]);
+  function addPulses(color: THREE.Color, count: number) {
+    const now = performance.now();
+    const fresh = Array.from({ length: count }, (_, i) => ({
+      id: Math.random(),
+      born: now,
+      color: color.clone(),
+      delay: i * 0.16,
+    }));
+    setPulses((prev) => [...prev.filter((p) => now - p.born < 1200 + p.delay * 1000), ...fresh]);
   }
 
   return (
@@ -292,22 +532,22 @@ function Scene({
         <Lightformer form="rect" intensity={1.5} color="#8b7cff" position={[-3, -1, 2]} scale={[3, 3, 1]} />
         <Lightformer form="ring" intensity={1} color="#eef1ee" position={[0, 3, -3]} scale={4} />
       </Environment>
-      <DriftField density={particles} />
-      {shardCount > 0 && <FloatingShards count={shardCount} />}
-      <GlassCore onPulse={addPulse} drag={drag} hovered={hovered} setHovered={setHovered} />
+      <SignalDriver live={live} onVerdict={(color, risk) => addPulses(color, risk === "high" ? 4 : 3)} />
+      <CameraRig live={live} calm={calm} />
+      <DepthStars />
+      <DriftField density={particles} live={live} />
+      {shardCount > 0 && <FloatingShards count={shardCount} live={live} />}
+      <GlassCore
+        onPulse={() => addPulses(live.current.tint, 1)}
+        drag={drag}
+        hovered={hovered}
+        setHovered={setHovered}
+        live={live}
+        calm={calm}
+      />
+      <ScanBeams live={live} calm={calm} />
       <ScanPulses pulses={pulses} />
-      {bloom && (
-        <EffectComposer multisampling={0}>
-          <Bloom
-            intensity={0.65}
-            luminanceThreshold={0.05}
-            luminanceSmoothing={0.4}
-            mipmapBlur
-            blendFunction={BlendFunction.SCREEN}
-          />
-          <Vignette eskil={false} offset={0.15} darkness={0.9} blendFunction={BlendFunction.NORMAL} />
-        </EffectComposer>
-      )}
+      {bloom && <ReactiveEffects live={live} calm={calm} />}
     </>
   );
 }
@@ -326,6 +566,7 @@ export default function ScanOrb({
   bloom?: boolean;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const [calm, setCalm] = useState(false);
   const drag = useRef<DragState>({
     dragging: false,
     lastX: 0,
@@ -335,6 +576,16 @@ export default function ScanOrb({
     rotY: 0,
     rotX: 0,
   });
+
+  // Reduced motion keeps the scene's color and light responses (they carry
+  // the verdict) but drops parallax, camera shake and fast spins.
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setCalm(query.matches);
+    const onChange = (e: MediaQueryListEvent) => setCalm(e.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     if (!interactive) return;
@@ -386,19 +637,14 @@ export default function ScanOrb({
   }, [interactive]);
 
   return (
-    <div
-      ref={wrapperRef}
-      className={className}
-      aria-hidden="true"
-      style={{ touchAction: interactive ? "none" : undefined }}
-    >
+    <div ref={wrapperRef} className={className} aria-hidden="true" style={{ touchAction: interactive ? "none" : undefined }}>
       <Canvas
         camera={{ position: [0, 0, 5], fov: 42 }}
         dpr={[1, 1.75]}
         gl={{ antialias: true, alpha: true }}
         style={{ pointerEvents: interactive ? "auto" : "none" }}
       >
-        <Scene drag={drag} particles={particles} shardCount={shardCount} bloom={bloom} />
+        <Scene drag={drag} particles={particles} shardCount={shardCount} bloom={bloom} calm={calm} />
       </Canvas>
     </div>
   );

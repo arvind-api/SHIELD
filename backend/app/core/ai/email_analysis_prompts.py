@@ -11,6 +11,10 @@ phishing_signals: specific, concrete red flags found in THIS email (e.g. "mismat
 "urgent account suspension threat", "requests password via email") — empty list if none.
 suggested_reply: a short, practical reply or action for the recipient, calibrated to the risk level \
 (e.g. do not click links / verify via another channel for high risk; a normal reply for low risk).
+evidence: up to 8 excerpts that back up your verdict. Each quote must be copied character-for-character \
+from the email (a short phrase, link, or sender address — not a paraphrase), paired with a brief reason. \
+The app highlights these in the user's original text, so a quote that isn't verbatim is dropped. Empty \
+list if nothing is suspicious.
 
 Base every field strictly on the content of the email provided — do not use generic or templated output."""
 

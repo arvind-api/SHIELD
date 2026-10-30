@@ -11,6 +11,10 @@ another concise label only if none of those fit.
 red_flags: specific, concrete things you found in THIS text (e.g. "asks for payment via gift cards", \
 "impersonates a delivery service with a threat of a missed package") — empty list if none.
 reasoning: a short, plain-language explanation of your verdict that a non-technical person could understand.
+evidence: up to 8 excerpts that back up your verdict. Each quote must be copied character-for-character \
+from the text (a short phrase or link — not a paraphrase), paired with a brief reason. The app highlights \
+these in the user's original text, so a quote that isn't verbatim is dropped. Empty list if nothing is \
+suspicious.
 
 Base every field strictly on the content of the text provided — do not use generic or templated output."""
 

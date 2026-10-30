@@ -12,18 +12,25 @@ common phishing misspellings — then scores and flags based on what actually
 matched in the input.
 """
 
+import json
+import logging
 import re
 
 from sqlalchemy.orm import Session
 
-from app.core.ai.client import analyze_email_via_ai, is_mock_mode
+from app.core.ai.client import AIUnavailableError, analyze_email_via_ai, is_mock_mode
 from app.core.text_signals import (
     LOOKALIKE_BRANDS,
+    build_evidence,
     find_grammar_anomalies,
-    find_suspicious_links,
+    matched_phrases,
+    scan_links,
 )
 from app.models.email_analysis import EmailAnalysis
 from app.schemas.email_analyzer import EmailAnalysisResult, EmailAnalyzeRequest, EmailAnalyzeResponse
+from app.schemas.evidence import AnalysisMode
+
+logger = logging.getLogger("shield.email_analyzer")
 
 # --- Rule-based mock engine ------------------------------------------------
 
@@ -42,6 +49,21 @@ URGENCY_PATTERNS = [
     r"\bexpires? (today|soon|in \d+ hours?)\b",
     r"\blegal action\b",
     r"\bfailure to (respond|comply)\b",
+    r"\b(by|before) (the )?end of (the )?(day|business)\b",
+    r"\botherwise\b[^.]{0,80}\bwill be (delayed|withheld|suspended|locked|closed|cancell?ed|frozen)\b",
+]
+
+# The subset of urgency that threatens a consequence on a deadline. Plain
+# expiry notices ("this reset link expires in 1 hour") are deliberately not
+# here — legit password-reset emails say that, and they mention passwords.
+DEADLINE_THREAT_PATTERNS = [
+    r"\bwithin 24 hours\b",
+    r"\bfinal notice\b",
+    r"\bfailure to (respond|comply)\b",
+    r"\blegal action\b",
+    r"\baccount (will be|has been) (suspended|locked|closed|terminated)\b",
+    r"\b(by|before) (the )?end of (the )?(day|business)\b",
+    r"\botherwise\b[^.]{0,80}\bwill be (delayed|withheld|suspended|locked|closed|cancell?ed|frozen)\b",
 ]
 
 CREDENTIAL_PAYMENT_PATTERNS = [
@@ -58,10 +80,16 @@ CREDENTIAL_PAYMENT_PATTERNS = [
     r"\bverify your (account|identity|payment)\b",
     r"\bupdate your (payment|billing) information\b",
     r"\bconfirm your (password|pin|account number)\b",
+    r"\b(login|log-in|sign[- ]in|account) (credentials|details)\b",
+    r"\baccount number\b",
 ]
 
+# Phishing that asks the victim to send sensitive info back by email, with no
+# link at all — the link-based combo bonus below never fires for these.
+REPLY_WITH_INFO_RE = re.compile(r"\breply(ing)? (to this email|with)\b", re.IGNORECASE)
+
 GENERIC_GREETING_RE = re.compile(
-    r"dear (customer|user|sir|madam|sir/madam|valued customer|account holder|member)\b",
+    r"dear (customer|user|sir|madam|sir/madam|valued customer|account holder|member|employee|staff|client)\b",
     re.IGNORECASE,
 )
 
@@ -98,24 +126,30 @@ def _find_sender_mismatch(text: str) -> list[str]:
     return signals
 
 
-def _score_and_flag(text: str) -> tuple[int, list[str], int]:
+def _score_and_flag(text: str) -> tuple[int, list[str], int, list[tuple[str, str]]]:
     signals: list[str] = []
+    # (exact excerpt, reason) pairs for the UI to highlight in the input.
+    evidence: list[tuple[str, str]] = []
     score = 0
 
-    urgency_hits = [p for p in URGENCY_PATTERNS if re.search(p, text, re.IGNORECASE)]
+    urgency_hits = matched_phrases(text, URGENCY_PATTERNS)
     if urgency_hits:
         score += min(25, 8 * len(urgency_hits))
         signals.append(f"urgency/pressure language detected ({len(urgency_hits)} phrase(s))")
+        evidence += [(phrase, "pressure or deadline") for phrase in urgency_hits]
 
-    cred_hits = [p for p in CREDENTIAL_PAYMENT_PATTERNS if re.search(p, text, re.IGNORECASE)]
+    cred_hits = matched_phrases(text, CREDENTIAL_PAYMENT_PATTERNS)
     if cred_hits:
         score += min(30, 10 * len(cred_hits))
         signals.append(f"requests for credentials/payment/personal info detected ({len(cred_hits)} phrase(s))")
+        evidence += [(phrase, "asks for sensitive info or payment") for phrase in cred_hits]
 
-    link_signals = find_suspicious_links(text)
+    link_hits = scan_links(text)
+    link_signals = [signal for _, signal in link_hits]
     if link_signals:
         score += min(30, 12 * len(link_signals))
         signals.extend(link_signals)
+        evidence += link_hits
 
     # A request for credentials/payment combined with a suspicious link is a
     # much stronger phishing signature than either alone — same fix applied
@@ -128,21 +162,41 @@ def _score_and_flag(text: str) -> tuple[int, list[str], int]:
             "combines a request for credentials/payment with a suspicious link — a classic phishing signature"
         )
 
+    # Link-free credential phishing (e.g. fake HR/payroll "reply with your bank
+    # details by end of day") was landing at low risk: the request plus a
+    # deadline/threat is itself the signature, even without a bad link.
+    if cred_hits and matched_phrases(text, DEADLINE_THREAT_PATTERNS):
+        score += 20
+        signals.append("pairs a request for sensitive info with a deadline or threat")
+
+        # Only under pressure — a plain "questions? reply to this email" in a
+        # welcome email that mentions account details shouldn't count.
+        reply_match = REPLY_WITH_INFO_RE.search(text)
+        if reply_match:
+            score += 15
+            signals.append("asks you to send sensitive info by replying to the email")
+            evidence.append((reply_match.group(0), "wants sensitive info sent back by email"))
+
     sender_signals = _find_sender_mismatch(text)
     if sender_signals:
         score += 20
         signals.extend(sender_signals)
+        from_match = FROM_HEADER_RE.search(text)
+        if from_match:
+            evidence.append((from_match.group(2), "sender address doesn't match who it claims to be"))
 
-    if GENERIC_GREETING_RE.search(text):
+    greeting_match = GENERIC_GREETING_RE.search(text)
+    if greeting_match:
         score += 8
         signals.append("uses a generic greeting instead of the recipient's name")
+        evidence.append((greeting_match.group(0), "generic greeting"))
 
     grammar_signals = find_grammar_anomalies(text)
     if grammar_signals:
         score += 7
         signals.extend(grammar_signals)
 
-    return min(score, 100), signals, len(urgency_hits)
+    return min(score, 100), signals, len(urgency_hits), evidence
 
 
 def _determine_tone(text: str, urgency_hit_count: int) -> str:
@@ -195,7 +249,7 @@ def _suggested_reply(risk_level: str, intent: str) -> str:
 
 
 def _analyze_email_mock(raw_email: str) -> EmailAnalysisResult:
-    score, signals, urgency_hit_count = _score_and_flag(raw_email)
+    score, signals, urgency_hit_count, evidence = _score_and_flag(raw_email)
     level = _risk_level(score)
     tone = _determine_tone(raw_email, urgency_hit_count)
     intent = _determine_intent(raw_email, score)
@@ -208,25 +262,35 @@ def _analyze_email_mock(raw_email: str) -> EmailAnalysisResult:
         risk_score=score,
         risk_level=level,
         suggested_reply=reply,
+        evidence=build_evidence(raw_email, evidence),
     )
 
 
 # --- Service entry point ----------------------------------------------------
 
 
-def analyze_email(db: Session, user_id: int, request: EmailAnalyzeRequest) -> EmailAnalyzeResponse:
+def _run_analysis(raw_email: str) -> tuple[EmailAnalysisResult, AnalysisMode]:
     if is_mock_mode():
-        result = _analyze_email_mock(request.raw_email)
-    else:
-        result = analyze_email_via_ai(request.raw_email)
+        return _analyze_email_mock(raw_email), "rules"
+    try:
+        result = analyze_email_via_ai(raw_email)
+    except AIUnavailableError as e:
+        logger.warning("AI analysis unavailable (%s); falling back to rule engine", e)
+        return _analyze_email_mock(raw_email), "rules_fallback"
+    result.evidence = build_evidence(raw_email, [(item.quote, item.reason) for item in result.evidence])
+    return result, "ai"
+
+
+def analyze_email(db: Session, user_id: int, request: EmailAnalyzeRequest) -> EmailAnalyzeResponse:
+    result, mode = _run_analysis(request.raw_email)
 
     record = EmailAnalysis(
         user_id=user_id,
         raw_email=request.raw_email,
-        result_json=result.model_dump_json(),
+        result_json=json.dumps({**result.model_dump(), "analysis_mode": mode}),
     )
     db.add(record)
     db.commit()
     db.refresh(record)
 
-    return EmailAnalyzeResponse(id=record.id, **result.model_dump())
+    return EmailAnalyzeResponse(id=record.id, analysis_mode=mode, **result.model_dump())

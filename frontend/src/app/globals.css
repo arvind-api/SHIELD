@@ -324,6 +324,59 @@ main {
   }
 }
 
+/* --- Evidence highlights ------------------------------------------------
+   AnalysisReadout's EvidenceView: the user's own text with each red flag
+   marked in the verdict's risk color, tagged with its list number. */
+@layer components {
+  .evidence-text {
+    --mark: var(--risk-low);
+    --mark-bg: var(--risk-low-bg);
+  }
+
+  .evidence-text[data-risk="medium"] {
+    --mark: var(--risk-medium);
+    --mark-bg: var(--risk-medium-bg);
+  }
+
+  .evidence-text[data-risk="high"] {
+    --mark: var(--risk-high);
+    --mark-bg: var(--risk-high-bg);
+  }
+
+  .evidence-mark {
+    color: var(--foreground);
+    background: var(--mark-bg);
+    border-bottom: 1px solid var(--mark);
+    border-radius: 0.2rem;
+    padding: 0 0.15rem;
+    transition:
+      background-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .evidence-mark[data-active="true"] {
+    background: var(--mark);
+    color: var(--void);
+    box-shadow: 0 0 14px var(--mark);
+  }
+
+  .evidence-tag {
+    margin-left: 0.15rem;
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 0.6rem;
+    color: var(--mark);
+  }
+
+  .evidence-mark[data-active="true"] .evidence-tag {
+    color: var(--void);
+  }
+
+  .evidence-index {
+    color: var(--muted);
+    min-width: 1rem;
+  }
+}
+
 /* Shared entrance animations — see .result-panel-enter / .error-message-enter
    usage in EmailAnalyzerForm, GuardianScannerForm, and the auth pages.
    Reduced-motion neutralizes the transform via the custom properties below

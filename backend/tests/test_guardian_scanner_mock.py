@@ -60,6 +60,11 @@ Verify your account now: http://amaz0n-account.com/billing
 
 Thank you,
 Amazon Account Services""",
+    # No link — the info is requested by reply under a deadline threat.
+    "A5_link_free_sms_bank_lock": (
+        "Alert: your bank account has been locked. Reply with your account number and PIN "
+        "within 24 hours or your account will be closed."
+    ),
 }
 
 LEGITIMATE_SAMPLES = {
@@ -99,6 +104,10 @@ We noticed a new sign-in to your Google Account on a Windows device. If this was
 Check activity: https://myaccount.google.com/notifications
 
 You received this email to let you know about important changes to your Google Account.""",
+    "B5_real_otp_sms": (
+        "Your Acme verification code is 482913. It expires in 10 minutes. "
+        "Never share this code with anyone - Acme staff will never ask for it."
+    ),
 }
 
 # Legitimate samples must stay strictly below the "medium" threshold used by
@@ -126,3 +135,12 @@ def test_legitimate_samples_score_low(text: str) -> None:
         f"risk_score {result.risk_score} crept toward the medium threshold "
         f"(ceiling={LEGITIMATE_RISK_SCORE_CEILING}, flags={result.red_flags})"
     )
+
+
+@pytest.mark.parametrize("text", PHISHING_SAMPLES.values(), ids=PHISHING_SAMPLES.keys())
+def test_phishing_evidence_quotes_are_verbatim(text: str) -> None:
+    # The UI highlights each quote in place, so it must occur in the input.
+    result = _scan_text_mock(text)
+    assert result.evidence, "high-risk result should point at the text that triggered it"
+    for item in result.evidence:
+        assert item.quote.lower() in text.lower()

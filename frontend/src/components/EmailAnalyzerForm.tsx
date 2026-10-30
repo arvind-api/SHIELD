@@ -1,38 +1,44 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 import { analyzeEmail, ApiError } from "@/lib/api";
+import { finishScan, pulseTyping, resetScan, startScan, waitForMinimumScan } from "@/lib/scanSignal";
+import { EvidenceView, RiskHeader } from "@/components/AnalysisReadout";
 import TiltCard from "@/components/TiltCard";
 import type { EmailAnalyzeResponse } from "@/types";
 
 type Status = "idle" | "loading" | "success" | "error";
 
-const RISK_BAND_CLASSES: Record<EmailAnalyzeResponse["risk_level"], string> = {
-  low: "border-b border-risk-low bg-risk-low-bg text-risk-low",
-  medium: "border-b border-risk-medium bg-risk-medium-bg text-risk-medium",
-  high: "border-b border-risk-high bg-risk-high-bg text-risk-high",
-};
-
 export default function EmailAnalyzerForm() {
   const router = useRouter();
   const [rawEmail, setRawEmail] = useState("");
+  const [analyzedText, setAnalyzedText] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<EmailAnalyzeResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Leave the shared 3D scene neutral for whichever page mounts next.
+  useEffect(() => resetScan, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setStatus("loading");
     setErrorMessage(null);
     setResult(null);
+    setAnalyzedText(rawEmail);
+    const startedAt = performance.now();
+    startScan();
 
     try {
       const response = await analyzeEmail({ raw_email: rawEmail });
+      await waitForMinimumScan(startedAt);
       setResult(response);
       setStatus("success");
+      finishScan(response.risk_level, response.risk_score);
     } catch (err) {
+      resetScan();
       if (err instanceof ApiError && err.status === 401) {
         router.push("/login");
         return;
@@ -49,7 +55,10 @@ export default function EmailAnalyzerForm() {
           className="min-h-[200px] rounded-lg border border-border bg-black/20 p-3 text-sm text-foreground outline-none transition-colors focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-glow)]"
           placeholder="Paste an email here..."
           value={rawEmail}
-          onChange={(event) => setRawEmail(event.target.value)}
+          onChange={(event) => {
+            setRawEmail(event.target.value);
+            pulseTyping();
+          }}
           disabled={status === "loading"}
           required
         />
@@ -82,15 +91,7 @@ export default function EmailAnalyzerForm() {
       {status === "success" && result && (
         <TiltCard className="result-panel-enter">
           <div className="tilt-card-surface panel overflow-hidden">
-            <div
-              className={`flex items-center justify-between px-6 py-4 ${RISK_BAND_CLASSES[result.risk_level]}`}
-            >
-              <span className="eyebrow text-current">{result.risk_level} risk</span>
-              <span className="data-figure text-2xl font-bold">
-                {result.risk_score}
-                <span className="text-sm font-normal opacity-70">/100</span>
-              </span>
-            </div>
+            <RiskHeader risk={result.risk_level} score={result.risk_score} mode={result.analysis_mode} />
 
             <div className="flex flex-col gap-6 p-6">
               <div className="grid grid-cols-2 gap-4">
@@ -116,6 +117,8 @@ export default function EmailAnalyzerForm() {
                   </ul>
                 </div>
               )}
+
+              <EvidenceView text={analyzedText} evidence={result.evidence} risk={result.risk_level} />
 
               <div className="border-t border-border pt-4">
                 <div className="eyebrow">Suggested reply</div>
